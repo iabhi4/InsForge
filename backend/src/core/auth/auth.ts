@@ -25,6 +25,7 @@ import {
   GoogleUserInfo,
   LinkedInUserInfo,
   DiscordUserInfo,
+  TwitterUserInfo,
   UserRecord,
 } from '@/types/auth';
 import { ADMIN_ID } from '@/utils/constants';
@@ -288,6 +289,7 @@ export class AuthService {
       | GitHubUserInfo
       | DiscordUserInfo
       | LinkedInUserInfo
+      | TwitterUserInfo
       | Record<string, unknown>
   ): Promise<CreateSessionResponse> {
     // First, try to find existing user by provider ID in _account_providers table
@@ -372,6 +374,7 @@ export class AuthService {
       | GitHubUserInfo
       | DiscordUserInfo
       | LinkedInUserInfo
+      | TwitterUserInfo
       | Record<string, unknown>,
     avatarUrl: string
   ): Promise<CreateSessionResponse> {
@@ -1072,6 +1075,135 @@ export class AuthService {
       userName,
       linkedinUserInfo.picture || '',
       linkedinUserInfo
+    );
+  }
+
+  /**
+   * Generate Twitter (X) OAuth authorization URL
+   */
+  async generateTwitterAuthUrl(state?: string): Promise<string> {
+    const oauthConfigService = OAuthConfigService.getInstance();
+    const config = await oauthConfigService.getConfigByProvider('twitter');
+
+    if (!config) {
+      throw new Error('Twitter OAuth not configured');
+    }
+
+    const selfBaseUrl = getApiBaseUrl();
+    if (config?.useSharedKey) {
+      if (!state) {
+        logger.warn('Shared Twitter OAuth called without state parameter');
+        throw new Error('State parameter is required for shared Twitter OAuth');
+      }
+      const cloudBaseUrl = process.env.CLOUD_API_HOST || 'https://api.insforge.dev';
+      const redirectUri = `${selfBaseUrl}/api/auth/oauth/shared/callback/${state}`;
+      const authUrl = await fetch(
+        `${cloudBaseUrl}/auth/v1/shared/twitter?redirect_uri=${encodeURIComponent(redirectUri)}`,
+        {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+      if (!authUrl.ok) {
+        logger.error('Failed to fetch Twitter auth URL:', {
+          status: authUrl.status,
+          statusText: authUrl.statusText,
+        });
+        throw new Error(`Failed to fetch Twitter auth URL: ${authUrl.statusText}`);
+      }
+      const responseData = (await authUrl.json()) as { auth_url?: string; url?: string };
+      return responseData.auth_url || responseData.url || '';
+    }
+
+    logger.debug('Twitter OAuth Config (fresh from DB):', {
+      clientId: config.clientId ? 'SET' : 'NOT SET',
+    });
+
+    const authUrl = new URL('https://twitter.com/i/oauth2/authorize');
+    authUrl.searchParams.set('client_id', config.clientId ?? '');
+    authUrl.searchParams.set('redirect_uri', `${selfBaseUrl}/api/auth/oauth/twitter/callback`);
+    authUrl.searchParams.set('response_type', 'code');
+    authUrl.searchParams.set(
+      'scope',
+      config.scopes ? config.scopes.join(' ') : 'users.read tweet.read'
+    );
+    if (state) {
+      authUrl.searchParams.set('state', state);
+    }
+
+    return authUrl.toString();
+  }
+
+  /**
+   * Exchange Twitter code for access token
+   */
+  async exchangeTwitterCodeForToken(code: string): Promise<string> {
+    const oauthConfigService = OAuthConfigService.getInstance();
+    const config = await oauthConfigService.getConfigByProvider('twitter');
+
+    if (!config) {
+      throw new Error('Twitter OAuth not configured');
+    }
+
+    const clientSecret = await oauthConfigService.getClientSecretByProvider('twitter');
+    const selfBaseUrl = getApiBaseUrl();
+
+    const response = await axios.post(
+      'https://api.twitter.com/2/oauth2/token',
+      new URLSearchParams({
+        client_id: config.clientId ?? '',
+        client_secret: clientSecret ?? '',
+        code,
+        redirect_uri: `${selfBaseUrl}/api/auth/oauth/twitter/callback`,
+        grant_type: 'authorization_code',
+      }).toString(),
+      {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      }
+    );
+
+    if (!response.data.access_token) {
+      throw new Error('Failed to get access token from Twitter');
+    }
+
+    return response.data.access_token as string;
+  }
+
+  /**
+   * Get Twitter user info
+   */
+  async getTwitterUserInfo(accessToken: string): Promise<TwitterUserInfo> {
+    const resp = await axios.get('https://api.twitter.com/2/users/me', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      params: {
+        'user.fields': 'name,username,profile_image_url',
+      },
+    });
+
+    const data = resp.data?.data || {};
+    return {
+      id: data.id,
+      username: data.username || '',
+      name: data.name || '',
+      email: undefined,
+      avatar: data.profile_image_url || '',
+    };
+  }
+
+  /**
+   * Find or create Twitter user
+   */
+  async findOrCreateTwitterUser(twitterUserInfo: TwitterUserInfo): Promise<CreateSessionResponse> {
+    const userName = twitterUserInfo.username || twitterUserInfo.name || 'twitter-user';
+    const email = twitterUserInfo.email || `${twitterUserInfo.id}@users.noreply.twitter.local`;
+
+    return this.findOrCreateThirdPartyUser(
+      'twitter',
+      twitterUserInfo.id,
+      email,
+      userName,
+      twitterUserInfo.avatar || '',
+      twitterUserInfo
     );
   }
 

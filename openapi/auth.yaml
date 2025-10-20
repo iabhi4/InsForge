@@ -437,6 +437,24 @@ paths:
         '500':
           description: OAuth not configured
 
+  /api/auth/oauth/twitter:
+    get:
+      summary: Initiate Twitter (X) OAuth flow
+      tags:
+        - Client
+      parameters:
+        - name: redirect_uri
+          in: query
+          schema:
+            type: string
+            format: uri
+          description: URL to redirect after authentication
+      responses:
+        '302':
+          description: Redirect to Twitter OAuth
+        '500':
+          description: OAuth not configured
+
   /api/auth/oauth/shared/callback:
     get:
       summary: Shared OAuth callback handler
@@ -480,7 +498,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [google, github, discord]
+            enum: [google, github, discord, twitter]
         - name: code
           in: query
           schema:

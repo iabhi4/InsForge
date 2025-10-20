@@ -186,6 +186,8 @@ export class OAuthConfigService {
           scopes = ['identify', 'email'];
         } else if (provider === 'linkedin') {
           scopes = ['openid', 'profile', 'email'];
+        } else if (provider === 'twitter') {
+          scopes = ['users.read', 'tweet.read'];
         }
       }
 

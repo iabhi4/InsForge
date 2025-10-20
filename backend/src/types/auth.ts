@@ -106,3 +106,11 @@ export interface LinkedInUserInfo {
   family_name?: string;
   locale?: string;
 }
+
+export interface TwitterUserInfo {
+  id: string;
+  username: string;
+  name?: string;
+  email?: string;
+  avatar?: string;
+}

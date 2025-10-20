@@ -153,6 +153,51 @@ router.get('/linkedin', async (req: Request, res: Response, next: NextFunction) 
   }
 });
 
+// GET /api/auth/oauth/twitter - Initialize Twitter (X) OAuth flow
+router.get('/twitter', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { redirect_uri } = req.query;
+    if (!redirect_uri) {
+      throw new AppError('Redirect URI is required', 400, ERROR_CODES.INVALID_INPUT);
+    }
+
+    const origin = process.env.FRONTEND_PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+    let finalRedirectUri: string;
+    try {
+      finalRedirectUri = new URL(String(redirect_uri)).toString();
+    } catch {
+      finalRedirectUri = new URL(String(redirect_uri), origin).toString();
+    }
+
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+      throw new AppError(
+        'Server misconfiguration: JWT_SECRET is missing',
+        500,
+        ERROR_CODES.AUTH_OAUTH_CONFIG_ERROR
+      );
+    }
+
+    const state = jwt.sign(
+      { provider: 'twitter', redirectUri: finalRedirectUri, createdAt: Date.now() },
+      jwtSecret,
+      { algorithm: 'HS256', expiresIn: '1h' }
+    );
+
+    const authUrl = await authService.generateTwitterAuthUrl(state);
+    res.json({ authUrl });
+  } catch (error) {
+    logger.error('Twitter OAuth error', { error });
+    next(
+      new AppError(
+        'Twitter OAuth is not properly configured. Please check your oauth configurations.',
+        500,
+        ERROR_CODES.AUTH_OAUTH_CONFIG_ERROR
+      )
+    );
+  }
+});
+
 // GET /api/auth/oauth/shared/callback/:state - Shared callback for OAuth providers
 router.get('/shared/callback/:state', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -178,7 +223,7 @@ router.get('/shared/callback/:state', async (req: Request, res: Response, next: 
       throw new AppError('Invalid state parameter', 400, ERROR_CODES.INVALID_INPUT);
     }
 
-    if (!['google', 'github', 'discord', 'linkedin'].includes(provider)) {
+    if (!['google', 'github', 'discord', 'linkedin', 'twitter'].includes(provider)) {
       logger.warn('Invalid provider in state', { provider });
       throw new AppError('Invalid provider in state', 400, ERROR_CODES.INVALID_INPUT);
     }
@@ -235,6 +280,16 @@ router.get('/shared/callback/:state', async (req: Request, res: Response, next: 
         picture: payloadData.avatar || '',
       };
       result = await authService.findOrCreateLinkedInUser(linkedinUserInfo);
+    } else if (provider === 'twitter') {
+      // Handle Twitter OAuth payload
+      const twitterUserInfo = {
+        id: payloadData.providerId,
+        username: payloadData.username || '',
+        name: payloadData.name || '',
+        email: payloadData.email,
+        avatar: payloadData.avatar || '',
+      };
+      result = await authService.findOrCreateTwitterUser(twitterUserInfo);
     }
 
     const finalredirectUri = new URL(redirectUri);
@@ -272,7 +327,7 @@ router.get('/:provider/callback', async (req: Request, res: Response, _: NextFun
       }
     }
 
-    if (!['google', 'github', 'discord', 'linkedin'].includes(provider)) {
+    if (!['google', 'github', 'discord', 'linkedin', 'twitter'].includes(provider)) {
       throw new AppError('Invalid provider', 400, ERROR_CODES.INVALID_INPUT);
     }
 
@@ -330,6 +385,13 @@ router.get('/:provider/callback', async (req: Request, res: Response, _: NextFun
 
       const linkedinUserInfo = await authService.verifyLinkedInToken(id_token);
       result = await authService.findOrCreateLinkedInUser(linkedinUserInfo);
+    } else if (provider === 'twitter') {
+      if (!code) {
+        throw new AppError('No authorization code provided', 400, ERROR_CODES.INVALID_INPUT);
+      }
+      const accessToken = await authService.exchangeTwitterCodeForToken(code as string);
+      const twitterUserInfo = await authService.getTwitterUserInfo(accessToken);
+      result = await authService.findOrCreateTwitterUser(twitterUserInfo);
     }
 
     // Create URL with JWT token and user info (like the working example)
